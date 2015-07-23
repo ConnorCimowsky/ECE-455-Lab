@@ -1,0 +1,114 @@
+\documentclass[11pt]{article}
+
+\usepackage{
+    courier,
+    listings,
+    pdfpages,
+    float
+}
+
+\usepackage{geometry}
+
+\lstset{
+    basicstyle=\ttfamily,
+    breaklines=true,
+    aboveskip=20pt,
+    showstringspaces=false
+}
+
+\title{Connor Cimowsky\protect\\20427800}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+Below is the definition of the \texttt{init\_timer} function I used for
+configuring the hardware timer. Since its frequency is 25 MHz, I scaled it by
+25\,000 in order to increment the \texttt{TC} register at a rate of 1000 Hz.
+This means that the value in \texttt{MR0} corresponds to the desired period of
+timer interrupts, in milliseconds. When the bottom 2 bits of \texttt{MCR} are
+set to 1, an interrupt will be generated when the value in the \texttt{TC}
+register reaches the value stored in \texttt{MR0}, and then the \texttt{TC}
+register will be reset. To start the timer, I set the \texttt{TCR}'s reset and
+enable bits accordingly in \texttt{start\_timer}.
+
+\begin{lstlisting}[language=c, frame=single]
+void init_timer(int period_ms)
+{
+    LPC_TIM0->PR = 25000;
+    LPC_TIM0->MR0 = period_ms;
+    LPC_TIM0->MCR = 0x03;
+}
+\end{lstlisting}
+\vspace{1em}
+
+To enable interrupts for the \texttt{INT0} button, I enabled general-purpose
+I/O for P2.10 and subsequently configured it for input. Then, I set the
+appropriate bit of \texttt{IO2IntEnF} to 1 so that interrupts would be fired on
+the falling edge of the \texttt{INT0} signal. Finally, I enabled interrupts for
+\texttt{EINT3} on the interrupt controller.
+
+\begin{lstlisting}[language=c, frame=single]
+void init_int0(void)
+{
+    LPC_PINCON->PINSEL4 &= ~(3 << 20);
+    LPC_GPIO2->FIODIR   &= ~(1 << 10);
+
+    LPC_GPIOINT->IO2IntEnF |= (1 << 10);
+    NVIC_EnableIRQ(EINT3_IRQn);
+}
+\end{lstlisting}
+\vspace{1em}
+
+To configure the LEDs, I set the appropriate GPIO direction bits for
+output and cleared the output pins.
+
+\begin{lstlisting}[language=c, frame=single]
+void init_led(void)
+{
+    LPC_GPIO1->FIODIR |= 0xb0000000;
+    LPC_GPIO2->FIODIR |= 0x0000007c;
+
+    LPC_GPIO1->FIOCLR |= ~(0x0);
+    LPC_GPIO2->FIOCLR |= ~(0x0);
+}
+\end{lstlisting}
+\vspace{0.6em}
+
+To implement strict interrupt scheduling, I disabled \texttt{EINT3} interrupts
+and fired a one-shot timer whenever the \texttt{INT0} button was pressed:
+
+\begin{lstlisting}[language=c, frame=single]
+void EINT3_IRQHandler(void)
+{
+    LPC_GPIOINT->IO2IntClr |= (1 << 10);
+
+    NVIC_DisableIRQ(EINT3_IRQn);
+
+    flash_message();
+    start_timer();
+}
+\end{lstlisting}
+\vspace{0.6em}
+
+When the timer interrupt is received after 5 seconds, I re-enable
+\texttt{EINT3} interrupts and disable timer interrupts:
+
+\begin{lstlisting}[language=c, frame=single]
+void TIMER0_IRQHandler(void)
+{
+    LPC_TIM0->IR = 0x01; // clear interrupt
+
+    NVIC_DisableIRQ(TIMER0_IRQn);
+    NVIC_EnableIRQ(EINT3_IRQn);
+} 
+\end{lstlisting}
+\vspace{0.6em}
+
+For the bursty scheduler, I followed similar steps, except I only disabled
+\texttt{EINT3} interrupts when a counter variable reached a value of 3.
+Additionally, I used an asynchronous timer to periodically reset this counter
+and re-enable \texttt{EINT3} interrupts every 10 seconds.
+
+\end{document}
